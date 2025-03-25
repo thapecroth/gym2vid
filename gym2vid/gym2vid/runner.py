@@ -7,7 +7,7 @@ import cv2
 import pickle
 import os
 from tqdm import tqdm
-from typing import List, Literal, get_args
+from typing import List, Literal, get_args, Dict, Any, Optional
 import fire
 import numpy as np
 from stable_baselines3.common.vec_env import SubprocVecEnv
@@ -15,6 +15,7 @@ from stable_baselines3.common.env_util import make_vec_env
 from multiprocessing import Pool
 import torch
 import traceback
+from .annotate import create_annotated_video
 
 import multiprocessing
 
@@ -262,6 +263,142 @@ def main(
 
                 for result in results:
                     result.get()
+
+
+class Runner:
+    """Main interface for training and recording gym environments."""
+
+    def __init__(self, env_name: str, config: Optional[Dict[str, Any]] = None):
+        """Initialize the Runner.
+
+        Args:
+            env_name: Name of the Gymnasium environment
+            config: Optional configuration dictionary for training parameters
+        """
+        self.env_name = env_name
+        self.config = config or {}
+        self.model_path = None
+        self.output_dir = None
+
+    def train_and_record(
+        self,
+        num_episodes: int,
+        output_dir: str,
+        train_timesteps: int = 10000,
+        n_train_envs: int = 2,
+    ) -> None:
+        """Train the agent and record episodes.
+
+        Args:
+            num_episodes: Number of episodes to record
+            output_dir: Directory to save videos and data
+            train_timesteps: Number of timesteps to train for
+            n_train_envs: Number of parallel environments for training
+        """
+        self.output_dir = output_dir
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Train the model
+        model_dir = os.path.join(output_dir, "model")
+        os.makedirs(model_dir, exist_ok=True)
+        save_model_name = os.path.join(
+            model_dir, f"trpo_{self.env_name.replace('/', '_')}"
+        )
+        save_model_name_zip = save_model_name + ".zip"
+
+        if not os.path.exists(save_model_name_zip):
+            env = make_vec_env(
+                self.env_name, n_envs=n_train_envs, vec_env_cls=SubprocVecEnv
+            )
+            env.metadata["render_fps"] = [24 for _ in range(n_train_envs)]
+
+            # Apply any custom config
+            model_kwargs = {
+                "verbose": 1,
+                "device": "cuda" if torch.cuda.is_available() else "cpu",
+            }
+            model_kwargs.update(self.config)
+
+            model = TRPO("MlpPolicy", env, **model_kwargs)
+            model.learn(total_timesteps=train_timesteps)
+            model.save(save_model_name)
+            env.close()
+
+        self.model_path = save_model_name_zip
+
+        # Record episodes
+        video_dir = os.path.join(output_dir, "videos", self.env_name)
+        os.makedirs(video_dir, exist_ok=True)
+
+        with Pool(processes=min(num_episodes, torch.cuda.device_count() or 1)) as pool:
+            results = []
+            with tqdm(total=num_episodes) as pbar:
+
+                def update_pbar(*args):
+                    pbar.update()
+
+                for episode_id in range(num_episodes):
+                    results.append(
+                        pool.apply_async(
+                            simulate,
+                            (
+                                self.env_name,
+                                self.model_path,
+                                episode_id,
+                                episode_id % (torch.cuda.device_count() or 1),
+                            ),
+                            callback=update_pbar,
+                            error_callback=lambda x: print(f"Error: {x}"),
+                        )
+                    )
+
+                for result in results:
+                    result.get()
+
+    def create_annotated_video(self, slow_factor: float = 1.0) -> None:
+        """Create an annotated video with state/action information.
+
+        Args:
+            slow_factor: Factor to slow down the video by
+        """
+        if not self.output_dir:
+            raise ValueError("No output directory set. Run train_and_record first.")
+
+        video_dir = os.path.join(self.output_dir, "videos", self.env_name)
+        for episode_id in range(
+            len(os.listdir(video_dir)) // 2
+        ):  # Divide by 2 because we have .mp4 and .pkl files
+            mp4_path = os.path.join(
+                video_dir,
+                f"{self.env_name.replace('/', '_')}_episodes_{episode_id}.mp4",
+            )
+            pkl_path = os.path.join(
+                video_dir,
+                f"{self.env_name.replace('/', '_')}_episodes_{episode_id}.pkl",
+            )
+            output_path = os.path.join(
+                video_dir,
+                f"{self.env_name.replace('/', '_')}_episodes_{episode_id}_annotated.mp4",
+            )
+
+            if os.path.exists(mp4_path) and os.path.exists(pkl_path):
+                create_annotated_video(mp4_path, pkl_path, output_path)
+
+                if slow_factor != 1.0:
+                    slower_output_path = output_path.replace(
+                        ".mp4", f"_slowed_{slow_factor}x.mp4"
+                    )
+                    import subprocess
+
+                    cmd = [
+                        "ffmpeg",
+                        "-i",
+                        output_path,
+                        "-filter:v",
+                        f"setpts={slow_factor}*PTS",
+                        slower_output_path,
+                    ]
+                    subprocess.run(cmd, check=True)
 
 
 if __name__ == "__main__":
