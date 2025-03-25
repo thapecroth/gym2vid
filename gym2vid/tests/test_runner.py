@@ -4,6 +4,7 @@ import shutil
 from gym2vid import Runner
 import tempfile
 from typing import Dict, Any
+import pickle
 
 
 @pytest.fixture
@@ -69,15 +70,35 @@ def test_train_and_record(temp_output_dir, basic_runner, train_params):
     video_dir = os.path.join(temp_output_dir, "videos", "CartPole-v1")
     assert os.path.exists(video_dir)
 
+    # Check that there's one MP4 and one PKL file per episode
     video_files = os.listdir(video_dir)
-    assert (
-        len([f for f in video_files if f.endswith(".mp4")])
-        == train_params["num_episodes"]
-    )
-    assert (
-        len([f for f in video_files if f.endswith(".pkl")])
-        == train_params["num_episodes"]
-    )
+    mp4_files = [f for f in video_files if f.endswith(".mp4") and "annotated" not in f]
+    pkl_files = [f for f in video_files if f.endswith(".pkl")]
+    
+    assert len(mp4_files) == train_params["num_episodes"]
+    assert len(pkl_files) == train_params["num_episodes"]
+    
+    # Check that each MP4 file has a corresponding PKL file with matching timesteps
+    for episode_id in range(train_params["num_episodes"]):
+        mp4_path = os.path.join(
+            video_dir, f"CartPole-v1_episodes_{episode_id}.mp4"
+        )
+        pkl_path = os.path.join(
+            video_dir, f"CartPole-v1_episodes_{episode_id}.pkl"
+        )
+        
+        assert os.path.exists(mp4_path), f"MP4 file for episode {episode_id} not found"
+        assert os.path.exists(pkl_path), f"PKL file for episode {episode_id} not found"
+        
+        # Verify that the PKL file contains action and state data
+        with open(pkl_path, "rb") as f:
+            data = pickle.load(f)
+            
+        assert "action_ls" in data, "PKL file missing action list"
+        assert "states_ls" in data, "PKL file missing states list"
+        assert "n_timesteps" in data, "PKL file missing timestep count"
+        assert len(data["action_ls"]) == data["n_timesteps"], "Action list length doesn't match timestep count"
+        assert len(data["states_ls"]) == data["n_timesteps"], "States list length doesn't match timestep count"
 
 
 @pytest.mark.parametrize("slow_factor", [1.0, 2.0])
@@ -89,11 +110,13 @@ def test_create_annotated_video(temp_output_dir, trained_runner, slow_factor):
     video_files = os.listdir(video_dir)
 
     # Check for annotated videos
-    assert any("annotated" in f for f in video_files)
+    annotated_files = [f for f in video_files if "annotated" in f]
+    assert len(annotated_files) > 0, "No annotated videos were created"
 
     # Check for slowed videos if slow_factor != 1.0
     if slow_factor != 1.0:
-        assert any(f"slowed_{slow_factor}x" in f for f in video_files)
+        slowed_files = [f for f in video_files if f"slowed_{slow_factor}x" in f]
+        assert len(slowed_files) > 0, f"No slowed videos with factor {slow_factor}x were created"
 
 
 @pytest.mark.parametrize(

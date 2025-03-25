@@ -2,15 +2,34 @@ import cv2
 import pickle
 import numpy as np
 import subprocess
+from typing import Dict, List, Any, Union, Tuple
 
 
-def create_annotated_video(mp4_path: str, pkl_path: str, output_path: str):
+def create_annotated_video(
+    mp4_path: str, 
+    pkl_path: str, 
+    output_path: str,
+) -> None:
+    """Create an annotated video with state and action information overlaid.
+    
+    This function reads a video file and its corresponding pickle file containing
+    state and action data, then creates a new video with this information overlaid
+    in a navigation bar at the top of each frame.
+    
+    Args:
+        mp4_path: Path to the input MP4 video file
+        pkl_path: Path to the pickle file containing states and actions
+        output_path: Path where the annotated video will be saved
+        
+    Returns:
+        None
+    """
     # Load the pickle file containing states and actions
     with open(pkl_path, "rb") as f:
-        data = pickle.load(f)
+        data: Dict[str, List[Any]] = pickle.load(f)
 
-    states_ls = data["states_ls"]
-    action_ls = data["action_ls"]
+    states_ls: List[np.ndarray] = data["states_ls"]
+    action_ls: List[Union[int, np.ndarray]] = data["action_ls"]
 
     # Open the video file
     cap = cv2.VideoCapture(mp4_path)
@@ -64,6 +83,32 @@ def create_annotated_video(mp4_path: str, pkl_path: str, output_path: str):
     out.release()
 
 
+def create_slowed_video(
+    input_path: str,
+    output_path: str,
+    slow_factor: float,
+) -> None:
+    """Create a slowed-down version of a video.
+    
+    Args:
+        input_path: Path to the input video file
+        output_path: Path where the slowed video will be saved
+        slow_factor: Factor by which to slow down the video
+        
+    Returns:
+        None
+    """
+    cmd = [
+        "ffmpeg",
+        "-i",
+        input_path,
+        "-filter:v",
+        f"setpts={slow_factor}*PTS",
+        output_path,
+    ]
+    subprocess.run(cmd, check=True)
+
+
 if __name__ == "__main__":
     # Example usage
     SLOW_FACTOR = 48.0
@@ -75,14 +120,10 @@ if __name__ == "__main__":
 
     create_annotated_video(base + mp4_path, base + pkl_path, base + output_path)
 
-    slower_output_path = base + f"{ENV_NAME}_episodes_0_annotated_slowed.mp4"
-    cmd = [
-        "ffmpeg",
-        "-i",
+    slower_output_path = f"{base}{ENV_NAME}_episodes_0_annotated_slowed_{SLOW_FACTOR}x.mp4"
+    create_slowed_video(
         base + f"{ENV_NAME}_episodes_0_annotated.mp4",
-        "-filter:v",
-        f"setpts={SLOW_FACTOR}*PTS",
         slower_output_path,
-    ]
-    subprocess.run(cmd, check=True)
-    print(f"Created slower video: {slower_output_path}")
+        SLOW_FACTOR,
+    )
+    print(f"Created slowed video: {slower_output_path}")

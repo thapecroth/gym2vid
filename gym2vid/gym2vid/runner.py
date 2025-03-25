@@ -15,7 +15,7 @@ from stable_baselines3.common.env_util import make_vec_env
 from multiprocessing import Pool
 import torch
 import traceback
-from .annotate import create_annotated_video
+from .annotate import create_annotated_video, create_slowed_video
 
 import multiprocessing
 
@@ -358,8 +358,16 @@ class Runner:
     def create_annotated_video(self, slow_factor: float = 1.0) -> None:
         """Create an annotated video with state/action information.
 
+        Creates annotated videos for all episodes by overlaying state and action
+        information on the recorded videos. Optionally creates slowed-down
+        versions of these annotated videos.
+
         Args:
-            slow_factor: Factor to slow down the video by
+            slow_factor: Factor to slow down the video by. Default is 1.0 (no slowing).
+                Values > 1.0 will slow the video (e.g., 2.0 means half speed).
+        
+        Raises:
+            ValueError: If no output directory is set (train_and_record must be called first).
         """
         if not self.output_dir:
             raise ValueError("No output directory set. Run train_and_record first.")
@@ -385,20 +393,11 @@ class Runner:
                 create_annotated_video(mp4_path, pkl_path, output_path)
 
                 if slow_factor != 1.0:
-                    slower_output_path = output_path.replace(
-                        ".mp4", f"_slowed_{slow_factor}x.mp4"
+                    slower_output_path = os.path.join(
+                        video_dir,
+                        f"{self.env_name.replace('/', '_')}_episodes_{episode_id}_annotated_slowed_{slow_factor}x.mp4",
                     )
-                    import subprocess
-
-                    cmd = [
-                        "ffmpeg",
-                        "-i",
-                        output_path,
-                        "-filter:v",
-                        f"setpts={slow_factor}*PTS",
-                        slower_output_path,
-                    ]
-                    subprocess.run(cmd, check=True)
+                    create_slowed_video(output_path, slower_output_path, slow_factor)
 
 
 if __name__ == "__main__":
