@@ -1,0 +1,6 @@
+numpy>=1.19.0
+opencv-python>=4.5.0
+gymnasium>=0.26.0
+torch>=1.9.0
+setuptools>=42.0.0
+wheel>=0.37.0 
