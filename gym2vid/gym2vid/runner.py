@@ -97,12 +97,13 @@ list_of_gym_environments = Literal[
 
 
 def simulate(
-    env_name: list_of_gym_environments, model_path: str, episode: int, cuda_idx: int
+    env_name: list_of_gym_environments, model_path: str, episode: int, cuda_idx: int, output_dir: str = None
 ):
     import gymnasium as gym
     import cv2
 
-    model = TRPO.load(model_path, device=f"cuda:{cuda_idx}")
+    # Force CPU for TRPO as it's not optimized for GPU
+    model = TRPO.load(model_path, device="cpu")
 
     def add_text_to_frame(
         frame: np.ndarray, obs: np.ndarray, action: np.ndarray
@@ -125,7 +126,8 @@ def simulate(
         return frame
 
     try:
-        os.makedirs("videos/" + env_name, exist_ok=True)
+        video_dir = os.path.join(output_dir, "videos", env_name) if output_dir else os.path.join("videos", env_name)
+        os.makedirs(video_dir, exist_ok=True)
         env = gym.make(env_name, render_mode="rgb_array")
         env.metadata["render_fps"] = 24
         obs, info = env.reset()
@@ -136,16 +138,20 @@ def simulate(
 
         # Initialize video writer
         frame = env.render()
-        assert isinstance(frame, np.ndarray)
+        assert isinstance(frame, np.ndarray), "Rendered frame must be a numpy array"
         height, width, layers = frame.shape  # type: ignore
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # type: ignore
-        video_writer = cv2.VideoWriter(f"videos/{env_name}/{episode_name}.mp4", fourcc, 24, (width, height))  # type: ignore
+        video_path = os.path.join(video_dir, f"{episode_name}.mp4")
+        video_writer = cv2.VideoWriter(video_path, fourcc, 24, (width, height))  # type: ignore
+        if not video_writer.isOpened():
+            raise RuntimeError(f"Failed to open video writer for {video_path}")
+            
         frame_counter = 0
 
         while not done and frame_counter < 240:
             action, _states = model.predict(obs)
             frame = env.render()
-            assert isinstance(frame, np.ndarray)
+            assert isinstance(frame, np.ndarray), "Rendered frame must be a numpy array"
             # Write frame to video file
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)  # type: ignore
             video_writer.write(frame_rgb)
@@ -162,9 +168,14 @@ def simulate(
         # Release the video writer
         video_writer.release()
 
-        assert len(action_ls) == len(states_ls)
+        # Verify video was created successfully
+        if not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
+            raise RuntimeError(f"Failed to create video at {video_path}")
 
-        with open(f"videos/{env_name}/{episode_name}.pkl", "wb") as f:
+        assert len(action_ls) == len(states_ls), "Action and state lists must have same length"
+
+        pkl_path = os.path.join(video_dir, f"{episode_name}.pkl")
+        with open(pkl_path, "wb") as f:
             pickle.dump(
                 {
                     "action_ls": (
@@ -189,7 +200,7 @@ def simulate(
         return True
     except Exception as e:
         print(f"Error in {env_name}: {e}")
-        traceback.print_stack()
+        traceback.print_exc()  # Print full traceback for better debugging
         return False
 
 
@@ -312,10 +323,10 @@ class Runner:
             )
             env.metadata["render_fps"] = [24 for _ in range(n_train_envs)]
 
-            # Apply any custom config
+            # Apply any custom config and force CPU for TRPO
             model_kwargs = {
                 "verbose": 1,
-                "device": "cuda" if torch.cuda.is_available() else "cpu",
+                "device": "cpu",  # Force CPU for TRPO as it's not optimized for GPU
             }
             model_kwargs.update(self.config)
 
@@ -346,14 +357,25 @@ class Runner:
                                 self.model_path,
                                 episode_id,
                                 episode_id % (torch.cuda.device_count() or 1),
+                                output_dir,
                             ),
                             callback=update_pbar,
                             error_callback=lambda x: print(f"Error: {x}"),
                         )
                     )
 
-                for result in results:
-                    result.get()
+                # Wait for all episodes to complete and check for failures
+                failed_episodes = []
+                for episode_id, result in enumerate(results):
+                    try:
+                        if not result.get():
+                            failed_episodes.append(episode_id)
+                    except Exception as e:
+                        print(f"Episode {episode_id} failed with error: {e}")
+                        failed_episodes.append(episode_id)
+
+                if failed_episodes:
+                    print(f"Warning: Episodes {failed_episodes} failed to record properly")
 
     def create_annotated_video(self, slow_factor: float = 1.0) -> None:
         """Create an annotated video with state/action information.
@@ -368,36 +390,57 @@ class Runner:
         
         Raises:
             ValueError: If no output directory is set (train_and_record must be called first).
+            RuntimeError: If source video files are missing or annotation fails.
         """
         if not self.output_dir:
             raise ValueError("No output directory set. Run train_and_record first.")
 
         video_dir = os.path.join(self.output_dir, "videos", self.env_name)
-        for episode_id in range(
-            len(os.listdir(video_dir)) // 2
-        ):  # Divide by 2 because we have .mp4 and .pkl files
-            mp4_path = os.path.join(
-                video_dir,
-                f"{self.env_name.replace('/', '_')}_episodes_{episode_id}.mp4",
-            )
-            pkl_path = os.path.join(
-                video_dir,
-                f"{self.env_name.replace('/', '_')}_episodes_{episode_id}.pkl",
-            )
-            output_path = os.path.join(
-                video_dir,
-                f"{self.env_name.replace('/', '_')}_episodes_{episode_id}_annotated.mp4",
-            )
+        if not os.path.exists(video_dir):
+            raise RuntimeError(f"Video directory not found: {video_dir}")
 
-            if os.path.exists(mp4_path) and os.path.exists(pkl_path):
+        # Get list of episode files
+        video_files = [f for f in os.listdir(video_dir) if f.endswith(".mp4") and "annotated" not in f]
+        if not video_files:
+            raise RuntimeError(f"No video files found in {video_dir}")
+
+        successful_annotations = 0
+        for video_file in video_files:
+            try:
+                episode_id = int(video_file.split("_episodes_")[1].split(".")[0])
+                mp4_path = os.path.join(video_dir, video_file)
+                pkl_path = os.path.join(
+                    video_dir,
+                    f"{self.env_name.replace('/', '_')}_episodes_{episode_id}.pkl"
+                )
+                output_path = os.path.join(
+                    video_dir,
+                    f"{self.env_name.replace('/', '_')}_episodes_{episode_id}_annotated.mp4"
+                )
+
+                if not os.path.exists(mp4_path):
+                    print(f"Warning: Source video not found: {mp4_path}")
+                    continue
+                if not os.path.exists(pkl_path):
+                    print(f"Warning: Pickle file not found: {pkl_path}")
+                    continue
+
                 create_annotated_video(mp4_path, pkl_path, output_path)
+                successful_annotations += 1
 
                 if slow_factor != 1.0:
                     slower_output_path = os.path.join(
                         video_dir,
-                        f"{self.env_name.replace('/', '_')}_episodes_{episode_id}_annotated_slowed_{slow_factor}x.mp4",
+                        f"{self.env_name.replace('/', '_')}_episodes_{episode_id}_annotated_slowed_{slow_factor}x.mp4"
                     )
                     create_slowed_video(output_path, slower_output_path, slow_factor)
+
+            except Exception as e:
+                print(f"Failed to annotate episode {episode_id}: {e}")
+                continue
+
+        if successful_annotations == 0:
+            raise RuntimeError("Failed to create any annotated videos")
 
 
 if __name__ == "__main__":

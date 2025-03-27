@@ -2,6 +2,7 @@ import cv2
 import pickle
 import numpy as np
 import subprocess
+import os
 from typing import Dict, List, Any, Union, Tuple
 
 
@@ -21,66 +22,89 @@ def create_annotated_video(
         pkl_path: Path to the pickle file containing states and actions
         output_path: Path where the annotated video will be saved
         
-    Returns:
-        None
+    Raises:
+        RuntimeError: If video file can't be opened or written
+        ValueError: If data in pickle file is invalid
     """
     # Load the pickle file containing states and actions
-    with open(pkl_path, "rb") as f:
-        data: Dict[str, List[Any]] = pickle.load(f)
+    try:
+        with open(pkl_path, "rb") as f:
+            data: Dict[str, List[Any]] = pickle.load(f)
 
-    states_ls: List[np.ndarray] = data["states_ls"]
-    action_ls: List[Union[int, np.ndarray]] = data["action_ls"]
+        if not isinstance(data, dict):
+            raise ValueError("Pickle file must contain a dictionary")
+        if "states_ls" not in data or "action_ls" not in data:
+            raise ValueError("Pickle file missing required keys: states_ls, action_ls")
+
+        states_ls: List[np.ndarray] = data["states_ls"]
+        action_ls: List[Union[int, np.ndarray]] = data["action_ls"]
+
+        if len(states_ls) != len(action_ls):
+            raise ValueError("States and actions lists must have same length")
+
+    except Exception as e:
+        raise RuntimeError(f"Failed to load pickle file {pkl_path}: {str(e)}")
 
     # Open the video file
     cap = cv2.VideoCapture(mp4_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Failed to open video file: {mp4_path}")
 
-    # Get video properties
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = int(cap.get(cv2.CAP_PROP_FPS))
-    nav_height = 60
-    new_height = height + nav_height
+    try:
+        # Get video properties
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        nav_height = 60
+        new_height = height + nav_height
 
-    # Create video writer
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(output_path, fourcc, fps, (width, new_height))
+        # Create video writer
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        out = cv2.VideoWriter(output_path, fourcc, fps, (width, new_height))
+        if not out.isOpened():
+            raise RuntimeError(f"Failed to create output video: {output_path}")
 
-    frame_idx = 0
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
+        frame_idx = 0
+        while cap.isOpened() and frame_idx < len(states_ls):
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-        # Create a new canvas with additional navbar area on top
-        canvas = np.zeros((new_height, width, 3), dtype=frame.dtype)
-        # Place the original frame into the bottom part of the canvas
-        canvas[nav_height:new_height, 0:width] = frame
+            # Create a new canvas with additional navbar area on top
+            canvas = np.zeros((new_height, width, 3), dtype=frame.dtype)
+            # Place the original frame into the bottom part of the canvas
+            canvas[nav_height:new_height, 0:width] = frame
 
-        # Add text overlays
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.5
-        font_color = (255, 255, 255)  # White color
-        line_type = 2
+            # Add text overlays
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.5
+            font_color = (255, 255, 255)  # White color
+            line_type = 2
 
-        # Format state and action text
-        state_text = f"State: {np.round(states_ls[frame_idx], 3)}"
-        action_text = f"Action: {action_ls[frame_idx]}"
+            # Format state and action text
+            state_text = f"State: {np.round(states_ls[frame_idx], 3)}"
+            action_text = f"Action: {action_ls[frame_idx]}"
 
-        # Draw text in the navbar area on the canvas
-        cv2.putText(
-            canvas, state_text, (15, 30), font, font_scale, font_color, line_type
-        )
-        cv2.putText(
-            canvas, action_text, (15, 50), font, font_scale, font_color, line_type
-        )
+            # Draw text in the navbar area on the canvas
+            cv2.putText(
+                canvas, state_text, (15, 30), font, font_scale, font_color, line_type
+            )
+            cv2.putText(
+                canvas, action_text, (15, 50), font, font_scale, font_color, line_type
+            )
 
-        # Write the composite frame with navbar to the output video
-        out.write(canvas)
-        frame_idx += 1
+            # Write the composite frame with navbar to the output video
+            out.write(canvas)
+            frame_idx += 1
 
-    # Release everything
-    cap.release()
-    out.release()
+    finally:
+        # Release everything even if there's an error
+        cap.release()
+        out.release()
+
+    # Verify the output video was created successfully
+    if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+        raise RuntimeError(f"Failed to create output video: {output_path}")
 
 
 def create_slowed_video(
@@ -95,18 +119,37 @@ def create_slowed_video(
         output_path: Path where the slowed video will be saved
         slow_factor: Factor by which to slow down the video
         
-    Returns:
-        None
+    Raises:
+        RuntimeError: If ffmpeg command fails or output video is not created
     """
-    cmd = [
-        "ffmpeg",
-        "-i",
-        input_path,
-        "-filter:v",
-        f"setpts={slow_factor}*PTS",
-        output_path,
-    ]
-    subprocess.run(cmd, check=True)
+    if not os.path.exists(input_path):
+        raise RuntimeError(f"Input video not found: {input_path}")
+
+    if slow_factor <= 0:
+        raise ValueError("Slow factor must be positive")
+
+    try:
+        cmd = [
+            "ffmpeg",
+            "-i",
+            input_path,
+            "-filter:v",
+            f"setpts={slow_factor}*PTS",
+            "-y",  # Overwrite output file if it exists
+            output_path,
+        ]
+        result = subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"ffmpeg command failed: {e.stderr}")
+
+    # Verify the output video was created
+    if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+        raise RuntimeError(f"Failed to create slowed video: {output_path}")
 
 
 if __name__ == "__main__":
