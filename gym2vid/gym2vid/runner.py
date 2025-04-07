@@ -328,7 +328,6 @@ class Runner:
                 "verbose": 1,
                 "device": "cpu",  # Force CPU for TRPO as it's not optimized for GPU
             }
-            model_kwargs.update(self.config)
 
             model = TRPO("MlpPolicy", env, **model_kwargs)
             model.learn(total_timesteps=train_timesteps)
