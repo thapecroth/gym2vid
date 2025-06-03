@@ -1,8 +1,4 @@
 import gymnasium as gym
-
-# from stable_baselines3 import PPO
-from stable_baselines3.common.evaluation import evaluate_policy
-from sb3_contrib import TRPO
 import cv2
 import pickle
 import os
@@ -10,19 +6,45 @@ from tqdm import tqdm
 from typing import List, Literal, get_args, Dict, Any, Optional
 import fire
 import numpy as np
-from stable_baselines3.common.vec_env import SubprocVecEnv
-from stable_baselines3.common.env_util import make_vec_env
-from multiprocessing import Pool
-import torch
+import multiprocessing
+
+# Handle optional ML dependencies gracefully for documentation generation
+try:
+    from stable_baselines3.common.evaluation import evaluate_policy
+    from sb3_contrib import TRPO
+    from stable_baselines3.common.vec_env import SubprocVecEnv
+    from stable_baselines3.common.env_util import make_vec_env
+    from multiprocessing import Pool
+    import torch
+
+    ML_DEPENDENCIES_AVAILABLE = True
+except ImportError:
+    # Create mock classes/functions for documentation generation
+    class MockTRPO:
+        @staticmethod
+        def load(*args, **kwargs):
+            raise RuntimeError(
+                "ML dependencies not available. Install with: pip install torch stable-baselines3 sb3-contrib"
+            )
+
+    class MockPool:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError(
+                "ML dependencies not available. Install with: pip install torch stable-baselines3 sb3-contrib"
+            )
+
+    TRPO = MockTRPO
+    Pool = MockPool
+    torch = None
+    ML_DEPENDENCIES_AVAILABLE = False
+
 import traceback
 from .annotate import create_annotated_video, create_slowed_video
 
-import multiprocessing
-
 multiprocessing.set_start_method("spawn", force=True)
-# N_GPUS = torch.cuda.device_count()
+# N_GPUS = torch.cuda.device_count() if torch else 0
 N_GPUS = 3
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# device = torch.device("cuda" if torch.cuda.is_available() else "cpu") if torch else "cpu"
 
 
 # python list of famous openai gym environments
@@ -97,7 +119,11 @@ list_of_gym_environments = Literal[
 
 
 def simulate(
-    env_name: list_of_gym_environments, model_path: str, episode: int, cuda_idx: int, output_dir: str = None
+    env_name: list_of_gym_environments,
+    model_path: str,
+    episode: int,
+    cuda_idx: int,
+    output_dir: str = None,
 ):
     import gymnasium as gym
     import cv2
@@ -126,7 +152,11 @@ def simulate(
         return frame
 
     try:
-        video_dir = os.path.join(output_dir, "videos", env_name) if output_dir else os.path.join("videos", env_name)
+        video_dir = (
+            os.path.join(output_dir, "videos", env_name)
+            if output_dir
+            else os.path.join("videos", env_name)
+        )
         os.makedirs(video_dir, exist_ok=True)
         env = gym.make(env_name, render_mode="rgb_array")
         env.metadata["render_fps"] = 24
@@ -145,7 +175,7 @@ def simulate(
         video_writer = cv2.VideoWriter(video_path, fourcc, 24, (width, height))  # type: ignore
         if not video_writer.isOpened():
             raise RuntimeError(f"Failed to open video writer for {video_path}")
-            
+
         frame_counter = 0
 
         while not done and frame_counter < 240:
@@ -172,7 +202,9 @@ def simulate(
         if not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
             raise RuntimeError(f"Failed to create video at {video_path}")
 
-        assert len(action_ls) == len(states_ls), "Action and state lists must have same length"
+        assert len(action_ls) == len(
+            states_ls
+        ), "Action and state lists must have same length"
 
         pkl_path = os.path.join(video_dir, f"{episode_name}.pkl")
         with open(pkl_path, "wb") as f:
@@ -207,6 +239,11 @@ def simulate(
 def train(
     env_name: list_of_gym_environments, train_timesteps: int, n_envs: int = 8
 ) -> str:
+    if not ML_DEPENDENCIES_AVAILABLE:
+        raise RuntimeError(
+            "ML dependencies not available. Install with: pip install torch stable-baselines3 sb3-contrib"
+        )
+
     os.makedirs("model", exist_ok=True)
     save_model_name = f"model/trpo_{env_name.replace('/', '_')}"
     save_model_name_zip = save_model_name + ".zip"
@@ -243,6 +280,11 @@ def main(
     n_train_envs: int = 2,
     n_infer_envs: int = 2,
 ):
+    if not ML_DEPENDENCIES_AVAILABLE:
+        raise RuntimeError(
+            "ML dependencies not available. Install with: pip install torch stable-baselines3 sb3-contrib"
+        )
+
     to_run_envs = [env_name]
     if env_name == "ALL":
         to_run_envs: List[list_of_gym_environments] = list(
@@ -286,6 +328,14 @@ class Runner:
             env_name: Name of the Gymnasium environment
             config: Optional configuration dictionary for training parameters
         """
+        if not ML_DEPENDENCIES_AVAILABLE:
+            print(
+                "Warning: ML dependencies (torch, stable-baselines3, sb3-contrib) not available."
+            )
+            print(
+                "Some functionality will be limited. Install with: pip install torch stable-baselines3 sb3-contrib"
+            )
+
         self.env_name = env_name
         self.config = config or {}
         self.model_path = None
@@ -306,6 +356,11 @@ class Runner:
             train_timesteps: Number of timesteps to train for
             n_train_envs: Number of parallel environments for training
         """
+        if not ML_DEPENDENCIES_AVAILABLE:
+            raise RuntimeError(
+                "ML dependencies not available. Install with: pip install torch stable-baselines3 sb3-contrib"
+            )
+
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
 
@@ -374,7 +429,9 @@ class Runner:
                         failed_episodes.append(episode_id)
 
                 if failed_episodes:
-                    print(f"Warning: Episodes {failed_episodes} failed to record properly")
+                    print(
+                        f"Warning: Episodes {failed_episodes} failed to record properly"
+                    )
 
     def create_annotated_video(self, slow_factor: float = 1.0) -> None:
         """Create an annotated video with state/action information.
@@ -386,7 +443,7 @@ class Runner:
         Args:
             slow_factor: Factor to slow down the video by. Default is 1.0 (no slowing).
                 Values > 1.0 will slow the video (e.g., 2.0 means half speed).
-        
+
         Raises:
             ValueError: If no output directory is set (train_and_record must be called first).
             RuntimeError: If source video files are missing or annotation fails.
@@ -399,7 +456,11 @@ class Runner:
             raise RuntimeError(f"Video directory not found: {video_dir}")
 
         # Get list of episode files
-        video_files = [f for f in os.listdir(video_dir) if f.endswith(".mp4") and "annotated" not in f]
+        video_files = [
+            f
+            for f in os.listdir(video_dir)
+            if f.endswith(".mp4") and "annotated" not in f
+        ]
         if not video_files:
             raise RuntimeError(f"No video files found in {video_dir}")
 
@@ -410,11 +471,11 @@ class Runner:
                 mp4_path = os.path.join(video_dir, video_file)
                 pkl_path = os.path.join(
                     video_dir,
-                    f"{self.env_name.replace('/', '_')}_episodes_{episode_id}.pkl"
+                    f"{self.env_name.replace('/', '_')}_episodes_{episode_id}.pkl",
                 )
                 output_path = os.path.join(
                     video_dir,
-                    f"{self.env_name.replace('/', '_')}_episodes_{episode_id}_annotated.mp4"
+                    f"{self.env_name.replace('/', '_')}_episodes_{episode_id}_annotated.mp4",
                 )
 
                 if not os.path.exists(mp4_path):
@@ -430,7 +491,7 @@ class Runner:
                 if slow_factor != 1.0:
                     slower_output_path = os.path.join(
                         video_dir,
-                        f"{self.env_name.replace('/', '_')}_episodes_{episode_id}_annotated_slowed_{slow_factor}x.mp4"
+                        f"{self.env_name.replace('/', '_')}_episodes_{episode_id}_annotated_slowed_{slow_factor}x.mp4",
                     )
                     create_slowed_video(output_path, slower_output_path, slow_factor)
 
