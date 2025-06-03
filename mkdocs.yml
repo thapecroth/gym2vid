@@ -1,4 +1,5 @@
 site_name: gym2vid
+site_url: https://thapecroth.github.io/gym2vid/
 theme:
   name: material
 nav:

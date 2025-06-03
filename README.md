@@ -2,7 +2,7 @@
 
 A Python package for training reinforcement learning agents and recording their gameplay videos with state and action annotations.
 
-For detailed documentation, please visit [our documentation site](https://<your-github-username>.github.io/gym2vid/).
+For detailed documentation, please visit [our documentation site](https://thapecroth.github.io/gym2vid/).
 
 ## Installation
 

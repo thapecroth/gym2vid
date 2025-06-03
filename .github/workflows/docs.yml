@@ -34,5 +34,6 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./site
-          # Optional: specify a custom domain if you have one
-          # cname: docs.example.com
+          force_orphan: true
+          # Explicitly disable custom domain to use default GitHub Pages URL
+          cname: ""
