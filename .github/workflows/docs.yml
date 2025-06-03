@@ -22,6 +22,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          pip install .
           pip install -r requirements.txt
           pip install mkdocs mkdocs-material mkdocstrings mkdocstrings-python
 
