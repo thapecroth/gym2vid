@@ -2,9 +2,9 @@
 # Only include dependencies absolutely necessary for docs generation
 
 # Basic dependencies
-numpy
-opencv-python-headless  # Headless version is lighter
-gymnasium
+# numpy
+# opencv-python-headless  # Headless version is lighter
+# gymnasium
 
 # Documentation tools
 mkdocs>=1.5.0
