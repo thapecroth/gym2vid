@@ -24,9 +24,19 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements-docs.txt
+          pip install -e .
 
       - name: Build documentation
         run: mkdocs build --verbose
+
+      - name: Remove any existing CNAME file
+        run: |
+          if [ -f "./site/CNAME" ]; then
+            rm ./site/CNAME
+            echo "Removed existing CNAME file"
+          else
+            echo "No CNAME file found"
+          fi
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
@@ -35,4 +45,4 @@ jobs:
           publish_dir: ./site
           force_orphan: true
           # Explicitly disable custom domain to use default GitHub Pages URL
-          cname: ""
+          cname: false
